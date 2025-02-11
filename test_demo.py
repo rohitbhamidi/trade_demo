@@ -41,7 +41,7 @@ connection_url = os.getenv("SINGLESTORE_DB_URL")
 if not connection_url:
     raise ValueError("SINGLESTORE_DB_URL not set in .env")
 engine = create_engine(connection_url)
-# Note: We no longer use a global connection; instead, each query opens a new connection.
+# Note: We no longer use a global connection; each query gets its own connection.
 
 # =============================================================================
 # Database Helper Function
@@ -66,9 +66,6 @@ def execute_query(query, params=None):
 # =============================================================================
 
 def get_total_volume(date, ticker):
-    """
-    Retrieve the total trading volume for a given ticker on a specified date.
-    """
     query = """
         SELECT ROUND(SUM(size), 0) AS "Total Volume"
         FROM live_trades
@@ -83,9 +80,6 @@ def get_total_volume(date, ticker):
     return total_volume
 
 def get_market_cap(ticker):
-    """
-    Retrieve the latest price for the given ticker and calculate a simulated market capitalization.
-    """
     query = """
         SELECT price
         FROM live_trades
@@ -98,14 +92,10 @@ def get_market_cap(ticker):
     if row is None or row[0] is None:
         return []
     latest_price = float(row[0])
-    market_cap = latest_price * 1000000000  # Simulated market cap
+    market_cap = latest_price * 1000000000
     return [market_cap]
 
 def get_top_sectors():
-    """
-    Retrieve the top 5 sectors by aggregated market capitalization.
-    Uses a hard-coded ticker-to-sector mapping.
-    """
     mapping = {
         "AAPL": "Technology",
         "MSFT": "Technology",
@@ -129,9 +119,6 @@ def get_top_sectors():
     return top_sectors
 
 def get_average_volume_per_transaction(start_date, end_date):
-    """
-    Retrieve the average volume per transaction over a specified date range.
-    """
     query = """
         SELECT AVG(size) AS "Average Volume per Transaction"
         FROM live_trades
@@ -143,12 +130,7 @@ def get_average_volume_per_transaction(start_date, end_date):
         avg_volume = float(avg_volume)
     return avg_volume
 
-# --- New Functions for Additional Financial Insights ---
-
 def get_max_trade_size(date, ticker):
-    """
-    Retrieve the maximum trade size for a given ticker on a specified date.
-    """
     query = """
         SELECT MAX(size) AS "Max Trade Size"
         FROM live_trades
@@ -160,9 +142,6 @@ def get_max_trade_size(date, ticker):
     return row[0] if row else None
 
 def get_average_trade_price(date, ticker):
-    """
-    Retrieve the average trade price for a given ticker on a specified date.
-    """
     query = """
         SELECT AVG(price) AS "Average Trade Price"
         FROM live_trades
@@ -177,9 +156,6 @@ def get_average_trade_price(date, ticker):
     return avg_price
 
 def get_trade_count(date, ticker):
-    """
-    Retrieve the total number of trades for a given ticker on a specified date.
-    """
     query = """
         SELECT COUNT(*) AS "Trade Count"
         FROM live_trades
@@ -195,10 +171,6 @@ def get_trade_count(date, ticker):
 # =============================================================================
 
 def run_conversation(question):
-    """
-    Send a question and available functions to the OpenAI chat model and process any
-    function calls returned by the model.
-    """
     messages = [{"role": "user", "content": question}]
     tools = [
         {
@@ -207,8 +179,7 @@ def run_conversation(question):
                 "name": "get_total_volume",
                 "description": (
                     "Retrieve the total trading volume for a given stock ticker on a specified date.\n"
-                    "Parameters:\n"
-                    " - date (str): The date (YYYY-MM-DD) for which to retrieve the volume.\n"
+                    "Parameters:\n - date (str): The date (YYYY-MM-DD) for which to retrieve the volume.\n"
                     " - ticker (str): The stock ticker symbol."
                 ),
                 "parameters": {
@@ -227,8 +198,7 @@ def run_conversation(question):
                 "name": "get_market_cap",
                 "description": (
                     "Retrieve the simulated market capitalization for a given ticker using its latest price.\n"
-                    "Parameters:\n"
-                    " - ticker (str): The stock ticker symbol."
+                    "Parameters:\n - ticker (str): The stock ticker symbol."
                 ),
                 "parameters": {
                     "type": "object",
@@ -243,9 +213,7 @@ def run_conversation(question):
             "type": "function",
             "function": {
                 "name": "get_top_sectors",
-                "description": (
-                    "Retrieve the top 5 sectors by total market capitalization. Returns a list of sectors and their aggregated market caps."
-                )
+                "description": "Retrieve the top 5 sectors by total market capitalization. Returns a list of sectors and their aggregated market caps."
             }
         },
         {
@@ -254,8 +222,7 @@ def run_conversation(question):
                 "name": "get_average_volume_per_transaction",
                 "description": (
                     "Retrieve the average volume per transaction over a specified date range.\n"
-                    "Parameters:\n"
-                    " - start_date (str): Start date in 'YYYY-MM-DD' format.\n"
+                    "Parameters:\n - start_date (str): Start date in 'YYYY-MM-DD' format.\n"
                     " - end_date (str): End date in 'YYYY-MM-DD' format."
                 ),
                 "parameters": {
@@ -274,8 +241,7 @@ def run_conversation(question):
                 "name": "get_max_trade_size",
                 "description": (
                     "Retrieve the maximum trade size for a given stock ticker on a specified date.\n"
-                    "Parameters:\n"
-                    " - date (str): The date (YYYY-MM-DD).\n"
+                    "Parameters:\n - date (str): The date (YYYY-MM-DD).\n"
                     " - ticker (str): The stock ticker symbol."
                 ),
                 "parameters": {
@@ -294,8 +260,7 @@ def run_conversation(question):
                 "name": "get_average_trade_price",
                 "description": (
                     "Retrieve the average trade price for a given stock ticker on a specified date.\n"
-                    "Parameters:\n"
-                    " - date (str): The date (YYYY-MM-DD).\n"
+                    "Parameters:\n - date (str): The date (YYYY-MM-DD).\n"
                     " - ticker (str): The stock ticker symbol."
                 ),
                 "parameters": {
@@ -314,8 +279,7 @@ def run_conversation(question):
                 "name": "get_trade_count",
                 "description": (
                     "Retrieve the total number of trades for a given stock ticker on a specified date.\n"
-                    "Parameters:\n"
-                    " - date (str): The date (YYYY-MM-DD).\n"
+                    "Parameters:\n - date (str): The date (YYYY-MM-DD).\n"
                     " - ticker (str): The stock ticker symbol."
                 ),
                 "parameters": {
@@ -335,7 +299,7 @@ def run_conversation(question):
             model="gpt-4o",
             messages=messages,
             tools=tools,
-            tool_choice="auto"  # explicitly set to auto
+            tool_choice="auto"
         )
     except Exception as e:
         logger.error("Error during OpenAI chat completion: %s", e)
@@ -354,7 +318,7 @@ def run_conversation(question):
             "get_average_trade_price": get_average_trade_price,
             "get_trade_count": get_trade_count,
         }
-        messages.append(response_message)  # add model's initial reply
+        messages.append(response_message)
 
         for tool_call in tool_calls:
             function_name = tool_call.function.name
@@ -430,7 +394,6 @@ def run_conversation(question):
 # =============================================================================
 
 server = Flask(__name__)
-# Use a Bootswatch Darkly theme for a modern dark look
 external_stylesheets = [
     "https://stackpath.bootstrapcdn.com/bootswatch/4.5.2/darkly/bootstrap.min.css"
 ]
@@ -442,14 +405,11 @@ app = dash.Dash(
 )
 
 app.layout = html.Div([
-    # Navigation Bar
     html.Nav(className="navbar navbar-expand-lg navbar-dark bg-primary", children=[
         html.Div("GenAI Driven Stock Data Analysis", className="navbar-brand")
     ]),
-    # Main container
     html.Div(className="container mt-4", children=[
         html.Div(className="row", children=[
-            # Left Column: Real-Time Graph
             html.Div(className="col-lg-8 mb-4", children=[
                 html.Div(className="card shadow", children=[
                     html.Div(className="card-header", children=[
@@ -463,7 +423,6 @@ app.layout = html.Div([
                     ])
                 ])
             ]),
-            # Right Column: Chat/Query Input
             html.Div(className="col-lg-4", children=[
                 html.Div(className="card shadow", children=[
                     html.Div(className="card-header", children=[
@@ -482,19 +441,15 @@ app.layout = html.Div([
                             n_clicks=0,
                             className='btn btn-primary mb-3'
                         ),
-                        html.Div(id='response-area', className='mt-2')
+                        html.Div(id='response-area', className='mt-2',
+                                 style={'height': '60vh', 'overflowY': 'auto'})
                     ])
                 ])
             ])
         ])
     ]),
-    # Interval for live graph updates
     dcc.Interval(id='interval-component', interval=1 * 1000, n_intervals=0)
 ])
-
-# -----------------------------------------------------------------------------
-# Callback for Live Updating the Stock Graph
-# -----------------------------------------------------------------------------
 
 @app.callback(
     Output('live-update-graph', 'figure'),
@@ -504,12 +459,10 @@ def update_graph_live(n):
     query = """
         SELECT localTS as time, price
         FROM live_trades
-        WHERE localTS IS NOT NULL
-        ORDER BY localTS DESC
-        LIMIT 100
+        WHERE localTS >= (SELECT MAX(localTS) FROM live_trades) - INTERVAL 15 SECOND
+        ORDER BY localTS ASC
     """
     try:
-        # Use the engine directly; pd.read_sql_query accepts an Engine.
         df = pd.read_sql_query(query, engine)
     except Exception as e:
         logger.error("Error querying live trades: %s", e)
@@ -518,7 +471,6 @@ def update_graph_live(n):
     if df.empty:
         df = pd.DataFrame({'time': [], 'price': []})
     
-    # Determine a safe y-axis range
     if not df.empty:
         y_min = df['price'].min() - 5
         y_max = df['price'].max() + 5
@@ -532,12 +484,11 @@ def update_graph_live(n):
                 y=df['price'],
                 name='Stock Data',
                 mode='lines+markers',
-                line={'color': 'cyan'},
-                fill='tozeroy'
+                line={'color': 'cyan'}
             )
         ],
         'layout': {
-            'title': 'Real-Time Stock Data',
+            'title': 'Real-Time Stock Data (Last 5 Minutes)',
             'xaxis': {'title': 'Time', 'color': '#ffffff'},
             'yaxis': {'title': 'Price', 'color': '#ffffff', 'range': [y_min, y_max]},
             'plot_bgcolor': '#2c3e50',
@@ -546,10 +497,6 @@ def update_graph_live(n):
         }
     }
     return figure
-
-# -----------------------------------------------------------------------------
-# Callback for Processing User Questions
-# -----------------------------------------------------------------------------
 
 @app.callback(
     Output('response-area', 'children'),
@@ -576,7 +523,6 @@ def update_output(n_clicks, value):
             return html.Div([
                 html.P(f"An error occurred: {str(e)}", style={'color': '#FF4136'})
             ])
-    # Initial instructions with sample queries based on the actual data
     return html.Div([
         html.P("Enter a financial question and press submit.", style={'color': '#ffffff'}),
         html.Br(),
@@ -592,10 +538,6 @@ def update_output(n_clicks, value):
         html.Br(),
         html.P("Sample 6: \"How many trades were executed for AMZN on 2025-02-10?\"", style={'color': '#ffffff'}),
     ])
-
-# =============================================================================
-# Main Entry Point
-# =============================================================================
 
 if __name__ == "__main__":
     server.run(debug=True, port=8051)
