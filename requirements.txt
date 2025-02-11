@@ -1,0 +1,10 @@
+openai
+singlestoredb
+SQLAlchemy
+pymysql
+pandas
+dash
+flask
+plotly
+python-dotenv
+tenacity
