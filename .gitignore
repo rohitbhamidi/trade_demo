@@ -64,3 +64,4 @@ env/
 
 # Local configuration overrides
 local_settings.py
+prompt.xml

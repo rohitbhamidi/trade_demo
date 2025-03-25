@@ -6,16 +6,13 @@ from getpass import getpass
 
 from dotenv import load_dotenv
 import pandas as pd
-import sqlalchemy
 from sqlalchemy import create_engine, text
 from sqlalchemy.exc import SQLAlchemyError
 import singlestoredb as s2  # kept for compatibility if needed
 
 from openai import OpenAI
 
-import dash
-import dash_core_components as dcc
-import dash_html_components as html
+from dash import Dash, dcc, html
 from dash.dependencies import Input, Output, State
 from flask import Flask
 import plotly.graph_objs as go
@@ -41,30 +38,9 @@ connection_url = os.getenv("SINGLESTORE_DB_URL")
 if not connection_url:
     raise ValueError("SINGLESTORE_DB_URL not set in .env")
 engine = create_engine(connection_url)
-connection = engine.connect()
 
 # =============================================================================
-# Database Helper Function
-# =============================================================================
-
-def execute_query(query, params=None):
-    """
-    Execute a SQL query using a given connection. If an error occurs, attempt a rollback
-    and log the error.
-    """
-    try:
-        result = connection.execute(text(query), params or {})
-        return result
-    except SQLAlchemyError as e:
-        try:
-            connection.rollback()
-        except Exception as rollback_error:
-            logger.error("Error during rollback: %s", rollback_error)
-        logger.error("Database query error: %s", e)
-        raise
-
-# =============================================================================
-# Query Functions
+# Query Functions using context-managed connections
 # =============================================================================
 
 def get_total_volume(date, ticker):
@@ -72,14 +48,21 @@ def get_total_volume(date, ticker):
     Retrieve the total trading volume for a given ticker on a specified date.
     """
     query = """
-        SELECT ROUND(SUM(size), 0) AS "Total Volume"
+        SELECT ROUND(SUM(size), 0) AS total_volume
         FROM live_trades
         WHERE localDate = :date
           AND ticker = :ticker
     """
-    result = execute_query(query, {"date": date, "ticker": ticker})
-    row = result.fetchone()
-    total_volume = row[0] if row else None
+    try:
+        with engine.connect() as connection:
+            result = connection.execute(text(query), {"date": date, "ticker": ticker})
+            row = result.fetchone()
+    except SQLAlchemyError as e:
+        logger.error("Database query error in get_total_volume: %s", e)
+        raise
+    if row is None:
+        return None
+    total_volume = row[0]
     if isinstance(total_volume, Decimal):
         total_volume = float(total_volume)
     return total_volume
@@ -96,11 +79,20 @@ def get_market_cap(ticker):
         ORDER BY localTS DESC
         LIMIT 1
     """
-    result = execute_query(query, {"ticker": ticker})
-    row = result.fetchone()
+    try:
+        with engine.connect() as connection:
+            result = connection.execute(text(query), {"ticker": ticker})
+            row = result.fetchone()
+    except SQLAlchemyError as e:
+        logger.error("Database query error in get_market_cap: %s", e)
+        raise
     if row is None or row[0] is None:
         return []
-    latest_price = float(row[0])
+    try:
+        latest_price = float(row[0])
+    except Exception as e:
+        logger.error("Error converting price to float for ticker %s: %s", ticker, e)
+        return []
     market_cap = latest_price * 1000000000
     return [market_cap]
 
@@ -118,9 +110,14 @@ def get_top_sectors():
         "TSLA": "Automotive"
     }
     query = "SELECT DISTINCT ticker FROM live_trades"
-    result = execute_query(query)
-    tickers = [row[0] for row in result.fetchall()]
-    
+    try:
+        with engine.connect() as connection:
+            result = connection.execute(text(query))
+            tickers = [row[0] for row in result.fetchall()]
+    except SQLAlchemyError as e:
+        logger.error("Database query error in get_top_sectors: %s", e)
+        raise
+
     sectors = {}
     for t in tickers:
         caps = get_market_cap(t)
@@ -129,20 +126,28 @@ def get_top_sectors():
         sectors[sector] = sectors.get(sector, 0) + cap
 
     sorted_sectors = sorted(sectors.items(), key=lambda x: x[1], reverse=True)[:5]
-    top_sectors = [{'sector': sec, 'market_cap': cap} for sec, cap in sorted_sectors]
-    return top_sectors
+    return [{'sector': sec, 'market_cap': cap} for sec, cap in sorted_sectors]
 
 def get_average_volume_per_transaction(start_date, end_date):
     """
     Retrieve the average volume per transaction over a specified date range.
     """
     query = """
-        SELECT AVG(size) AS "Average Volume per Transaction"
+        SELECT AVG(size) AS avg_volume
         FROM live_trades
         WHERE localDate BETWEEN :start_date AND :end_date
     """
-    result = execute_query(query, {"start_date": start_date, "end_date": end_date})
-    avg_volume = result.fetchone()[0]
+    try:
+        with engine.connect() as connection:
+            result = connection.execute(text(query), {"start_date": start_date, "end_date": end_date})
+            row = result.fetchone()
+    except SQLAlchemyError as e:
+        logger.error("Database query error in get_average_volume_per_transaction: %s", e)
+        raise
+
+    if row is None:
+        return None
+    avg_volume = row[0]
     if isinstance(avg_volume, Decimal):
         avg_volume = float(avg_volume)
     return avg_volume
@@ -332,7 +337,7 @@ def run_conversation(question):
 # =============================================================================
 
 server = Flask(__name__)
-app = dash.Dash(
+app = Dash(
     __name__,
     server=server,
     routes_pathname_prefix='/',
@@ -342,41 +347,50 @@ app = dash.Dash(
 app.layout = html.Div(className='app', children=[
     html.Div(className='background-shapes'),
     html.H1("GenAI Driven Stock Data Analysis", className='title'),
-    html.Div(
-        id='graph-container',
-        className='card',
-        style={
-            'width': '40%',
-            'position': 'absolute',
-            'left': '5%',
-            'top': '50%',
-            'transform': 'translateY(-50%)'
-        },
-        children=[
-            dcc.Graph(id='live-update-graph', style={'height': '80vh'})
-        ]
-    ),
-    html.Div(
-        className='right-container',
-        style={
-            'width': '40%',
-            'position': 'absolute',
-            'right': '5%',
-            'top': '50%',
-            'transform': 'translateY(-50%)'
-        },
-        children=[
-            dcc.Input(
-                id='user-input',
-                type='text',
-                placeholder='Enter your question here...',
-                className='input'
-            ),
-            html.Button('Submit', id='submit-val', n_clicks=0, className='button'),
-            html.Div(id='response-area', className='response-area')
-        ]
-    ),
-    dcc.Interval(id='interval-component', interval=1 * 1000, n_intervals=0)  # Update every second
+    html.Div(className='main-content', children=[
+        html.Div(
+            id='graph-container',
+            className='card',
+            children=[
+                dcc.Graph(id='live-update-graph', style={'height': '60vh'})
+            ]
+        ),
+        html.Div(
+            className='query-container',
+            children=[
+                dcc.Input(
+                    id='user-input',
+                    type='text',
+                    placeholder='Enter your question here...',
+                    className='query-input'
+                ),
+                html.Button(
+                    'Submit',
+                    id='submit-val',
+                    n_clicks=0,
+                    className='query-button',
+                    style={'textAlign': 'center'}  # ensures text is centered
+                ),
+                # Answer card: fixed to 40vh with scroll if overflow.
+                html.Div(
+                    id='response-area',
+                    className='response-area',
+                    style={'height': '40vh', 'overflowY': 'auto'}
+                ),
+                # Sample card: fixed height of 20vh.
+                html.Div(
+                    id='sample-card',
+                    className='sample-card',
+                    style={'height': '20vh'},
+                    children=[
+                        html.P("Sample: What is the market cap for AAPL?", className='sample'),
+                        html.P("Sample: What are the top 5 sectors by market capitalization?", className='sample')
+                    ]
+                )
+            ]
+        )
+    ]),
+    dcc.Interval(id='interval-component', interval=1000, n_intervals=0)
 ])
 
 @app.callback(
@@ -388,11 +402,13 @@ def update_graph_live(n):
         SELECT localTS as time, price
         FROM live_trades
         WHERE localTS IS NOT NULL
+          AND ticker = 'AAPL'
         ORDER BY localTS DESC
         LIMIT 100
     """
     try:
-        df = pd.read_sql_query(query, connection)
+        with engine.connect() as connection:
+            df = pd.read_sql_query(query, connection)
     except Exception as e:
         logger.error("Error querying live trades: %s", e)
         df = pd.DataFrame({'time': [], 'price': []})
@@ -400,10 +416,12 @@ def update_graph_live(n):
     if df.empty:
         df = pd.DataFrame({'time': [], 'price': []})
     
-    # Safely determine y-axis range
+    # Compute market cap from price.
+    df['market_cap'] = df['price'] * 1000000000
+
     if not df.empty:
-        y_min = df['price'].min() - 5
-        y_max = df['price'].max() + 5
+        y_min = df['market_cap'].min() - 5
+        y_max = df['market_cap'].max() + 5
     else:
         y_min, y_max = 0, 100
 
@@ -411,20 +429,20 @@ def update_graph_live(n):
         'data': [
             go.Scatter(
                 x=df['time'],
-                y=df['price'],
-                name='Stock Data',
+                y=df['market_cap'],
+                name='Market Cap',
                 mode='lines+markers',
-                line={'color': 'orange'},
+                line={'color': '#add8e6'},
                 fill='tozeroy'
             )
         ],
         'layout': {
-            'title': 'Real-Time Stock Data',
-            'xaxis': {'title': 'Time', 'color': 'white'},
-            'yaxis': {'title': 'Price', 'color': 'white', 'range': [y_min, y_max]},
-            'plot_bgcolor': 'black',
-            'paper_bgcolor': 'black',
-            'font': {'color': 'white'},
+            'title': "AAPL's Market Cap",
+            'xaxis': {'title': 'Time', 'color': '#111827'},
+            'yaxis': {'title': 'Market Cap', 'color': '#111827', 'range': [y_min, y_max]},
+            'plot_bgcolor': "#f9f9f9",
+            'paper_bgcolor': "#f9f9f9",
+            'font': {'color': '#111827'},
         }
     }
     return figure
@@ -440,31 +458,14 @@ def update_output(n_clicks, value):
             response = run_conversation(value)
             if response and response.choices:
                 response_message = response.choices[0].message.content
-                return html.Div(
-                    className='response-container',
-                    children=[html.P(response_message)],
-                    style={'color': '#000000'}
-                )
+                # Render the response using Markdown to support formatting.
+                return dcc.Markdown(response_message, style={'color': '#111827'})
             else:
-                return html.Div([
-                    html.P("Query not recognized. Please try again.", style={'color': '#000000'})
-                ])
+                return dcc.Markdown("Query not recognized. Please try again.", style={'color': '#111827'})
         except Exception as e:
             logger.error("Error processing conversation: %s", e)
-            return html.Div([
-                html.P(f"An error occurred: {str(e)}", style={'color': '#FF4136'})
-            ])
-    return html.Div([
-        html.P("Enter a question and press submit.", style={'color': '#000000'}),
-        html.Br(),
-        html.P("Sample 1: \"What was the total volume for AAPL on May 31, 2024?\"", style={'color': '#000000'}),
-        html.Br(),
-        html.P("Sample 2: \"What is the market cap for AAPL?\"", style={'color': '#000000'}),
-        html.Br(),
-        html.P("Sample 3: \"What are the top 5 sectors by market capitalization?\"", style={'color': '#000000'}),
-        html.Br(),
-        html.P("Sample 4: \"What is the average volume per transaction from May 1, 2024 to May 31, 2024?\"", style={'color': '#000000'}),
-    ], style={'color': '#000000'})
+            return dcc.Markdown(f"An error occurred: {str(e)}", style={'color': '#FF4136'})
+    return dcc.Markdown("Enter a question and press submit.", style={'color': '#111827'})
 
 # =============================================================================
 # Main Entry Point
